@@ -49,12 +49,17 @@ case $1 in
         ;;
     remove)
         skip_confirm=false
+        keep_branch=false
         shift  # consume "remove"
-        # Parse flags.
+        # Parse flags. --keep-branch removes only the worktree directory and
+        # leaves the local branch ref intact (env-destroy's ambiguous fallback
+        # uses it so a sanitize collision can never force-delete the wrong ref).
         args=()
         for arg in "$@"; do
             if [[ "$arg" == "--yes" ]]; then
                 skip_confirm=true
+            elif [[ "$arg" == "--keep-branch" ]]; then
+                keep_branch=true
             else
                 args+=("$arg")
             fi
@@ -86,7 +91,11 @@ case $1 in
             fi
         done
         echo "Worktree: $worktree_dir"
-        echo "Branch:   $branch (will be deleted)"
+        if [[ "$keep_branch" == true ]]; then
+            echo "Branch:   $branch (kept)"
+        else
+            echo "Branch:   $branch (will be deleted)"
+        fi
         if [[ -d "$worktree_dir" ]]; then
             changes=$(cd "$worktree_dir" && git status --porcelain 2>/dev/null)
             if [[ -n "$changes" ]]; then
@@ -103,7 +112,12 @@ case $1 in
         fi
         if [[ "$skip_confirm" != true ]]; then
             echo ""
-            read -p "Remove worktree and delete branch? (y/N): " confirm
+            if [[ "$keep_branch" == true ]]; then
+                prompt="Remove worktree (keep branch)? (y/N): "
+            else
+                prompt="Remove worktree and delete branch? (y/N): "
+            fi
+            read -p "$prompt" confirm
             if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
                 echo "Aborted."
                 exit 0
@@ -114,7 +128,9 @@ case $1 in
         else
             git worktree prune
         fi
-        git branch -D "$branch" 2>/dev/null && echo "Deleted branch $branch"
+        if [[ "$keep_branch" != true ]]; then
+            git branch -D "$branch" 2>/dev/null && echo "Deleted branch $branch"
+        fi
         ;;
     cleanup)
         shift

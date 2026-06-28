@@ -565,12 +565,19 @@ MIGRATE
         # force-deleting the wrong ref if the worktree was retargeted via
         # `git checkout` to a different branch — including a colliding one that
         # sanitizes to the same dir name (e.g. feat/foo-bar vs feat-foo/bar).
-        # In any ambiguous or retargeted case we fall back to the safe form,
-        # which still removes the bound directory (the real ref may then orphan
-        # — strictly better than deleting the wrong branch). The fully robust
+        # In any ambiguous or retargeted case we fall back to --keep-branch,
+        # which removes the bound directory and deletes *no* branch at all (the
+        # real ref may then orphan — strictly better than deleting the wrong
+        # branch). --keep-branch is what makes "ambiguous ⇒ deletes nothing by
+        # the real path" hold even for a slash branch colliding with its own
+        # sanitized twin (feat/foo vs a literal feat-foo): without it, the safe
+        # form would force-delete the unrelated feat-foo ref. The fully robust
         # fix persists the original branch at env-creation time (see #154).
         for entry in "${worktree_entries[@]}"; do
             IFS='|' read -r wt_repo wt_branch <<< "$entry"
+            # Resolve the live branch BEFORE worktree.sh remove deletes the dir:
+            # resolve_unsanitized_branch reads `git branch --show-current` from
+            # the worktree, so it must run while the directory still exists.
             real_branch=$(resolve_unsanitized_branch "$wt_branch")
             sanitized_matches=0
             while IFS= read -r candidate; do
@@ -579,7 +586,7 @@ MIGRATE
             if [[ "$(sanitize_branch "$real_branch")" == "$wt_branch" && "$sanitized_matches" -eq 1 ]]; then
                 "$NABSPATH/bin/worktree.sh" remove --yes "$wt_repo" "$real_branch"
             else
-                "$NABSPATH/bin/worktree.sh" remove --yes "$wt_repo" "$wt_branch"
+                "$NABSPATH/bin/worktree.sh" remove --yes --keep-branch "$wt_repo" "$wt_branch"
             fi
         done
         echo "Destroyed environment '$env_name'"
