@@ -14,7 +14,7 @@ const renderInRouter = ui => render( <HashRouter>{ ui }</HashRouter> );
 describe( 'Page', () => {
 	it( 'renders the breadcrumb current item as h1 and the content', () => {
 		renderInRouter(
-			<Page breadcrumbItems={ [ { label: 'Audience', to: '/' }, { label: 'Access control' } ] }>
+			<Page breadcrumbItems={ [ { label: 'Audience', url: '/' }, { label: 'Access control' } ] }>
 				<div>Body content</div>
 			</Page>
 		);
@@ -38,7 +38,7 @@ describe( 'Page', () => {
 
 	it( 'names the page region after the current breadcrumb item', () => {
 		renderInRouter(
-			<Page breadcrumbItems={ [ { label: 'Audience', to: '/' }, { label: 'Access control' } ] }>
+			<Page breadcrumbItems={ [ { label: 'Audience', url: '/' }, { label: 'Access control' } ] }>
 				<div />
 			</Page>
 		);

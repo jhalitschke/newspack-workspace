@@ -27,12 +27,13 @@ import './style.scss';
  * @param {Object}    props
  * @param {Array}     props.breadcrumbItems Trail items: `{ label, url? }`.
  * @param {*}         [props.badges]
+ * @param {*}         [props.subTitle]
  * @param {*}         [props.actions]
  * @param {string}    [props.className]
  * @param {*}         props.children
  * @return {JSX.Element} Page component.
  */
-const Page = ( { breadcrumbItems = [], badges, actions, className, children } ) => {
+const Page = ( { breadcrumbItems = [], badges, subTitle, actions, className, children } ) => {
 	const currentLabel = breadcrumbItems[ breadcrumbItems.length - 1 ]?.label;
 	return (
 		<AdminUIPage
@@ -45,6 +46,7 @@ const Page = ( { breadcrumbItems = [], badges, actions, className, children } ) 
 				</HStack>
 			}
 			badges={ badges }
+			subTitle={ subTitle }
 			actions={ actions }
 			hasPadding={ false }
 		>

@@ -5,7 +5,7 @@
 	background-color: wp-colors.$white;
 }
 
-[class*="header-visual"] svg path {
+.newspack-page [class*="header-visual"] svg path {
 	transform: scale(1.1111);
 	transform-box: view-box;
 	transform-origin: center;
