@@ -144,13 +144,13 @@ export default function ContentGateSettings( {
 	const layoutOptions: { label: string; action?: () => void; href?: string }[] = [];
 	if ( hasRegistrationLayout ) {
 		layoutOptions.push( {
-			label: __( 'Edit registered access layout', 'newspack-plugin' ),
+			label: __( 'Edit Registered Access Layout', 'newspack-plugin' ),
 			href: getEditGateLayoutUrl( gate.id, 'registration' ),
 		} );
 	}
 	if ( hasCustomAccessLayout ) {
 		layoutOptions.push( {
-			label: __( 'Edit paid access layout', 'newspack-plugin' ),
+			label: __( 'Edit Paid Access Layout', 'newspack-plugin' ),
 			href: getEditGateLayoutUrl( gate.id, 'custom_access' ),
 		} );
 	}
@@ -183,7 +183,7 @@ export default function ContentGateSettings( {
 				<CardBody>
 					<Grid className="newspack-content-gates__gate__settings" columns={ isNewsletter ? 2 : 3 } gutter={ 16 } borders noMargin>
 						<div>
-							<h4>{ __( 'Content rules', 'newspack-plugin' ) }</h4>
+							<h4>{ __( 'Content Rules', 'newspack-plugin' ) }</h4>
 							{ gate.content_rules.length > 0 ? (
 								gate.content_rules.map( rule => (
 									<ContentRuleControl
@@ -202,7 +202,7 @@ export default function ContentGateSettings( {
 						</div>
 						{ ! isNewsletter && (
 							<div>
-								<h4>{ __( 'Registered access', 'newspack-plugin' ) }</h4>
+								<h4>{ __( 'Registered Access', 'newspack-plugin' ) }</h4>
 								{ gate.registration?.active && (
 									<p>
 										<strong>{ __( 'Require verification:', 'newspack-plugin' ) } </strong>{ ' ' }
@@ -224,7 +224,7 @@ export default function ContentGateSettings( {
 							</div>
 						) }
 						<div>
-							<h4>{ __( 'Paid access', 'newspack-plugin' ) }</h4>
+							<h4>{ __( 'Paid Access', 'newspack-plugin' ) }</h4>
 							{ gate.custom_access?.active &&
 								gate.custom_access.access_rules.length > 0 &&
 								gate.custom_access.access_rules.map( ruleGroup =>

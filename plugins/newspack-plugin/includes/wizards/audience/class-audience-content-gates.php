@@ -74,7 +74,7 @@ class Audience_Content_Gates extends Wizard {
 	 * @return string The wizard name.
 	 */
 	public function get_name() {
-		return esc_html__( 'Audience Management / Access control', 'newspack-plugin' );
+		return esc_html__( 'Audience Management / Access Control', 'newspack-plugin' );
 	}
 
 	/**
@@ -128,7 +128,7 @@ class Audience_Content_Gates extends Wizard {
 		add_submenu_page(
 			$this->parent_slug,
 			$this->get_name(),
-			esc_html__( 'Access control', 'newspack-plugin' ),
+			esc_html__( 'Access Control', 'newspack-plugin' ),
 			$this->capability,
 			$this->slug,
 			[ $this, 'render_wizard' ]

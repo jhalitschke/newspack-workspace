@@ -12,7 +12,7 @@ import '../../shared/js/public-path';
 import { CardBody, CardDivider, CardMedia, ExternalLink, ToggleControl, __experimentalVStack as VStack } from '@wordpress/components'; // eslint-disable-line @wordpress/no-unsafe-wp-apis
 import { Component, Fragment, render, createInterpolateElement, createRef } from '@wordpress/element';
 import { __ } from '@wordpress/i18n';
-import { Icon, category, plus, postList, settings } from '@wordpress/icons';
+import { Icon, plus, postList, settings } from '@wordpress/icons';
 
 /**
  * Internal dependencies.
@@ -33,8 +33,8 @@ import {
 	Handoff,
 	ImageUpload,
 	Modal,
-	NewspackIcon,
 	Notice,
+	Page,
 	PluginInstaller,
 	PluginSettings,
 	PluginToggle,
@@ -101,27 +101,11 @@ class ComponentsDemo extends Component {
 		return (
 			<Fragment>
 				{ newspack_aux_data.is_debug_mode && <Notice debugMode /> }
-				<div className="newspack-wizard__header">
-					<div className="newspack-wizard__header__inner">
-						<div className="newspack-wizard__title">
-							<Button
-								isLink
-								href={ newspack_urls.dashboard }
-								label={ __( 'Return to Dashboard', 'newspack-plugin' ) }
-								showTooltip={ true }
-								icon={ category }
-								iconSize={ 36 }
-							>
-								<NewspackIcon size={ 36 } />
-							</Button>
-							<div>
-								<h2>{ __( 'Components Demo', 'newspack-plugin' ) }</h2>
-								<span>{ __( 'Simple components used for composing the UI of Newspack', 'newspack-plugin' ) }</span>
-							</div>
-						</div>
-					</div>
-				</div>
-				<div className="newspack-wizard newspack-wizard__content">
+				<Page
+					breadcrumbItems={ [ { label: __( 'Components Demo', 'newspack-plugin' ) } ] }
+					subTitle={ __( 'Simple components used for composing the UI of Newspack', 'newspack-plugin' ) }
+				>
+					<div className="newspack-wizard newspack-wizard__content">
 					<Card>
 						<h2>{ __( 'Autocomplete with Suggestions (single-select)', 'newspack-plugin' ) }</h2>
 						<AutocompleteWithSuggestions
@@ -1101,6 +1085,7 @@ class ComponentsDemo extends Component {
 						</Grid>
 					</Card>
 				</div>
+				</Page>
 				<Footer />
 			</Fragment>
 		);
