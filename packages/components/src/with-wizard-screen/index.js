@@ -125,9 +125,6 @@ export default function withWizardScreen( WrappedComponent, { hidePrimaryButton,
 		if ( breadcrumbItems ) {
 			return renderPage( breadcrumbItems );
 		}
-		// Only tabbed wizards derive breadcrumbs from the route, and those always
-		// render inside a Router; other consumers fall back to the header text
-		// without ever calling useLocation.
 		if ( tabbedNavigation ) {
 			return <RouteBreadcrumbs sections={ tabbedNavigation } render={ renderPage } />;
 		}

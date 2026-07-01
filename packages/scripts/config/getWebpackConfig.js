@@ -29,7 +29,6 @@ module.exports = ( ...args ) => {
 		delete config.optimization.splitChunks.cacheGroups.style;
 	}
 
-	// Force-bundle a few @wordpress packages that have no runtime global.
 	// Returning a non-undefined falsey value (null) skips the default
 	// externalization; returning undefined cascades to the default behavior.
 	config.plugins = config.plugins
