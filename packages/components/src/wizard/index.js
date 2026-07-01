@@ -58,7 +58,7 @@ const ResetHeaderData = () => {
  * Wizard header + content region. Rendered inside the wizard's HashRouter so it
  * can read the current route and derive the active-tab breadcrumb.
  */
-const WizardHeaderRegion = ( { hideHeader, headerText, sections, subTitle, actions, children } ) => {
+const WizardHeaderRegion = ( { hideHeader, headerText, sections, sectionName, subTitle, actions, children } ) => {
 	const { pathname } = useLocation();
 
 	if ( hideHeader ) {
@@ -68,6 +68,12 @@ const WizardHeaderRegion = ( { hideHeader, headerText, sections, subTitle, actio
 	let breadcrumbItems = activeBreadcrumbs( sections, pathname );
 	if ( ! breadcrumbItems.length && headerText ) {
 		breadcrumbItems = [ { label: headerText } ];
+	}
+	// A section can set a render-time current-page label (e.g. the integration
+	// name, or Add/Edit) via headerData.sectionName. Append it as the trailing
+	// breadcrumb (the h1) unless the route trail already ends with it.
+	if ( sectionName && breadcrumbItems[ breadcrumbItems.length - 1 ]?.label !== sectionName ) {
+		breadcrumbItems = [ ...breadcrumbItems, { label: sectionName } ];
 	}
 
 	return (
@@ -119,7 +125,7 @@ const Wizard = (
 	const isQuietLoading = useSelect( select => select( WIZARD_STORE_NAMESPACE ).isQuietLoading() );
 	const headerData = useSelect( select => select( WIZARD_STORE_NAMESPACE ).getHeaderData() );
 	const notices = useSelect( select => select( WIZARD_STORE_NAMESPACE ).getNotices() );
-	const { actions, backNav, badges, sectionDescription, sectionMenu, sectionTitle, sectionPrimaryAction, sectionSecondaryAction } =
+	const { actions, backNav, badges, sectionDescription, sectionMenu, sectionName, sectionTitle, sectionPrimaryAction, sectionSecondaryAction } =
 		headerData;
 
 	const mainActions = actions?.filter( action => action.type === 'primary' || action.type === 'secondary' );
@@ -262,6 +268,7 @@ const Wizard = (
 						hideHeader={ hideHeader }
 						headerText={ headerText }
 						sections={ routedSections }
+						sectionName={ sectionName }
 						subTitle={ subHeaderText }
 						actions={ headerActions }
 					>
