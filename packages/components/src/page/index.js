@@ -24,13 +24,13 @@ import './style.scss';
  * `visual` slot. The breadcrumb trail (with the current page as the single h1)
  * is supplied as admin-ui's `breadcrumbs` ReactNode.
  *
- * @param {Object}    props
- * @param {Array}     props.breadcrumbItems Trail items: `{ label, url? }`.
- * @param {*}         [props.badges]
- * @param {*}         [props.subTitle]
- * @param {*}         [props.actions]
- * @param {string}    [props.className]
- * @param {*}         props.children
+ * @param {Object} props
+ * @param {Array}  props.breadcrumbItems Trail items: `{ label, url? }`.
+ * @param {*}      [props.badges]
+ * @param {*}      [props.subTitle]
+ * @param {*}      [props.actions]
+ * @param {string} [props.className]
+ * @param {*}      props.children
  * @return {JSX.Element} Page component.
  */
 const Page = ( { breadcrumbItems = [], badges, subTitle, actions, className, children } ) => {

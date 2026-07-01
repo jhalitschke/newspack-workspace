@@ -35,6 +35,7 @@ const Breadcrumbs = ( { items = [] } ) => {
 				{ preceding.map( ( item, index ) => (
 					<li key={ item.url || index }>
 						{ item.url ? (
+							// eslint-disable-next-line jsx-a11y/anchor-has-content -- content is supplied via the Text children through @wordpress/ui's render prop.
 							<Text variant="body-lg" render={ <Link tone="neutral" render={ <a href={ item.url } /> } /> }>
 								{ item.label }
 							</Text>
@@ -48,6 +49,7 @@ const Breadcrumbs = ( { items = [] } ) => {
 				) ) }
 				{ last && last.label && (
 					<li>
+						{ /* eslint-disable-next-line jsx-a11y/heading-has-content -- content is supplied via the Text children through @wordpress/ui's render prop. */ }
 						<Text variant="heading-lg" render={ <h1 /> } className="newspack-breadcrumbs__current">
 							{ last.label }
 						</Text>

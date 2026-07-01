@@ -24,11 +24,7 @@ describe( 'Page', () => {
 
 	it( 'renders actions and subtitle', () => {
 		renderInRouter(
-			<Page
-				breadcrumbItems={ [ { label: 'Audience' } ] }
-				subTitle="Manage readers"
-				actions={ <button>Add new</button> }
-			>
+			<Page breadcrumbItems={ [ { label: 'Audience' } ] } subTitle="Manage readers" actions={ <button>Add new</button> }>
 				<div />
 			</Page>
 		);

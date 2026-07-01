@@ -5,24 +5,18 @@ const defaultConfig = require( '@wordpress/scripts/config/webpack.config' );
 
 // @wordpress packages that WP does NOT expose as runtime globals and that
 // `@wordpress/admin-ui`/`@wordpress/ui` depend on, so they must be bundled.
-const FORCE_BUNDLE = new Set( [
-	'@wordpress/theme',
-	'@wordpress/style-runtime',
-] );
+const FORCE_BUNDLE = new Set( [ '@wordpress/theme', '@wordpress/style-runtime' ] );
 
 module.exports = ( ...args ) => {
 	let config = { ...defaultConfig };
 
 	// Merge config extensions into default config.
-	args.forEach( ( extension ) => {
+	args.forEach( extension => {
 		config = { ...config, ...extension };
 	} );
 
 	// Ensure that webpack resolves modules from the Newspack Scripts node_modules as well as the root repo's node_modules.
-	config.resolve.modules = [
-		path.resolve( __dirname, '../node_modules' ),
-		'node_modules',
-	];
+	config.resolve.modules = [ path.resolve( __dirname, '../node_modules' ), 'node_modules' ];
 
 	// Clear cacheGroups so that CSS files don't get the `style-` prefix.
 	if ( config?.optimization?.splitChunks?.cacheGroups?.style ) {
@@ -32,10 +26,7 @@ module.exports = ( ...args ) => {
 	// Returning a non-undefined falsey value (null) skips the default
 	// externalization; returning undefined cascades to the default behavior.
 	config.plugins = config.plugins
-		.filter(
-			( plugin ) =>
-				plugin.constructor.name !== 'DependencyExtractionWebpackPlugin'
-		)
+		.filter( plugin => plugin.constructor.name !== 'DependencyExtractionWebpackPlugin' )
 		.concat(
 			new DependencyExtractionWebpackPlugin( {
 				requestToExternal( request ) {

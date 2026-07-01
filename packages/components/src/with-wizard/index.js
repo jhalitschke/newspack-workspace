@@ -202,10 +202,7 @@ export default function withWizard( WrappedComponent, requiredPlugins ) {
 			if ( complete ) {
 				return <Redirect from="/plugin-requirements" to="/" />;
 			}
-			const headerText =
-				requiredPlugins.length > 1
-					? __( 'Required plugins', 'newspack-plugin' )
-					: __( 'Required plugin', 'newspack-plugin' );
+			const headerText = requiredPlugins.length > 1 ? __( 'Required plugins', 'newspack-plugin' ) : __( 'Required plugin', 'newspack-plugin' );
 			const content = (
 				<div className="newspack-wizard newspack-wizard__content">
 					<PluginInstaller plugins={ requiredPlugins } onStatus={ status => this.pluginInstallationStatus( status ) } />

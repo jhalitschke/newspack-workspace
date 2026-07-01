@@ -18,15 +18,7 @@ describe( 'Breadcrumbs', () => {
 	} );
 
 	it( 'renders a non-last item with a url as a link, without a url as text', () => {
-		render(
-			<Breadcrumbs
-				items={ [
-					{ label: 'Advertising' },
-					{ label: 'Sponsors', url: '/wp-admin/x' },
-					{ label: 'All sponsors' },
-				] }
-			/>
-		);
+		render( <Breadcrumbs items={ [ { label: 'Advertising' }, { label: 'Sponsors', url: '/wp-admin/x' }, { label: 'All sponsors' } ] } /> );
 		const links = screen.getAllByRole( 'link' );
 		expect( links ).toHaveLength( 1 );
 		expect( links[ 0 ] ).toHaveTextContent( 'Sponsors' );
@@ -48,9 +40,7 @@ describe( 'Breadcrumbs', () => {
 	} );
 
 	it( 'renders a "/" separator after each preceding item', () => {
-		const { container } = render(
-			<Breadcrumbs items={ [ { label: 'Audience' }, { label: 'Access control' } ] } />
-		);
+		const { container } = render( <Breadcrumbs items={ [ { label: 'Audience' }, { label: 'Access control' } ] } /> );
 		const separators = container.querySelectorAll( '.newspack-breadcrumbs__separator' );
 		expect( separators ).toHaveLength( 1 );
 		expect( separators[ 0 ] ).toHaveTextContent( '/' );

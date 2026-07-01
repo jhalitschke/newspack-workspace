@@ -10,10 +10,7 @@ const SECTIONS = [
 
 describe( 'activeBreadcrumbs', () => {
 	it( 'returns the matching section breadcrumbs by exact path', () => {
-		expect( activeBreadcrumbs( SECTIONS, '/donations' ) ).toEqual( [
-			{ label: 'Audience Management' },
-			{ label: 'Donations' },
-		] );
+		expect( activeBreadcrumbs( SECTIONS, '/donations' ) ).toEqual( [ { label: 'Audience Management' }, { label: 'Donations' } ] );
 	} );
 
 	it( 'falls back to the first section when no path matches', () => {
@@ -34,10 +31,7 @@ describe( 'activeBreadcrumbs', () => {
 			{ path: '/', breadcrumbs: [ { label: 'Root' } ] },
 			{ path: '/access', exact: false, breadcrumbs: [ { label: 'Root' }, { label: 'Access control' } ] },
 		];
-		expect( activeBreadcrumbs( sections, '/access/institutions' ) ).toEqual( [
-			{ label: 'Root' },
-			{ label: 'Access control' },
-		] );
+		expect( activeBreadcrumbs( sections, '/access/institutions' ) ).toEqual( [ { label: 'Root' }, { label: 'Access control' } ] );
 	} );
 
 	it( 'matches a parameterized route to its own breadcrumbs', () => {
@@ -49,10 +43,7 @@ describe( 'activeBreadcrumbs', () => {
 				breadcrumbs: [ { label: 'Access control' }, { label: 'Edit institution' } ],
 			},
 		];
-		expect( activeBreadcrumbs( sections, '/institutions/123' ) ).toEqual( [
-			{ label: 'Access control' },
-			{ label: 'Edit institution' },
-		] );
+		expect( activeBreadcrumbs( sections, '/institutions/123' ) ).toEqual( [ { label: 'Access control' }, { label: 'Edit institution' } ] );
 	} );
 
 	it( 'matches via activeTabPaths wildcard', () => {
@@ -64,10 +55,7 @@ describe( 'activeBreadcrumbs', () => {
 				breadcrumbs: [ { label: 'Root' }, { label: 'Segments' } ],
 			},
 		];
-		expect( activeBreadcrumbs( sections, '/segments/123' ) ).toEqual( [
-			{ label: 'Root' },
-			{ label: 'Segments' },
-		] );
+		expect( activeBreadcrumbs( sections, '/segments/123' ) ).toEqual( [ { label: 'Root' }, { label: 'Segments' } ] );
 	} );
 
 	it( 'prefers an exact path match over the first section', () => {

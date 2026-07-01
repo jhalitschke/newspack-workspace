@@ -76,9 +76,7 @@ const WizardHeaderRegion = ( { hideHeader, headerText, sections, sectionName, su
 	// crumb is appended in turn, skipping one that just repeats the current
 	// trailing label so the same label never renders twice.
 	if ( sectionName ) {
-		const extraCrumbs = ( Array.isArray( sectionName ) ? sectionName : [ { label: sectionName } ] ).filter(
-			crumb => crumb?.label
-		);
+		const extraCrumbs = ( Array.isArray( sectionName ) ? sectionName : [ { label: sectionName } ] ).filter( crumb => crumb?.label );
 		extraCrumbs.forEach( crumb => {
 			if ( breadcrumbItems[ breadcrumbItems.length - 1 ]?.label !== crumb.label ) {
 				breadcrumbItems = [ ...breadcrumbItems, crumb ];
