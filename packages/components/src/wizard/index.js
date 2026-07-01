@@ -69,11 +69,21 @@ const WizardHeaderRegion = ( { hideHeader, headerText, sections, sectionName, su
 	if ( ! breadcrumbItems.length && headerText ) {
 		breadcrumbItems = [ { label: headerText } ];
 	}
-	// A section can set a render-time current-page label (e.g. the integration
-	// name, or Add/Edit) via headerData.sectionName. Append it as the trailing
-	// breadcrumb (the h1) unless the route trail already ends with it.
-	if ( sectionName && breadcrumbItems[ breadcrumbItems.length - 1 ]?.label !== sectionName ) {
-		breadcrumbItems = [ ...breadcrumbItems, { label: sectionName } ];
+	// A section can supply render-time current-page breadcrumb(s) via
+	// headerData.sectionName — either a single label (e.g. the integration name,
+	// or Add/Edit) or an ordered array of `{ label, url? }` crumbs when the leaf
+	// needs its own linked ancestors (e.g. an integration's Logs subpage). Each
+	// crumb is appended in turn, skipping one that just repeats the current
+	// trailing label so the same label never renders twice.
+	if ( sectionName ) {
+		const extraCrumbs = ( Array.isArray( sectionName ) ? sectionName : [ { label: sectionName } ] ).filter(
+			crumb => crumb?.label
+		);
+		extraCrumbs.forEach( crumb => {
+			if ( breadcrumbItems[ breadcrumbItems.length - 1 ]?.label !== crumb.label ) {
+				breadcrumbItems = [ ...breadcrumbItems, crumb ];
+			}
+		} );
 	}
 
 	return (

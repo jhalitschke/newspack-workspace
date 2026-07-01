@@ -15,7 +15,10 @@ import { LogsView } from './logs-view';
 
 const API_PATH = '/newspack/v1/wizard/newspack-audience-integrations/settings';
 
-const INTEGRATIONS_BREADCRUMBS = [ { label: __( 'Audience Management', 'newspack-plugin' ) }, { label: __( 'Integrations', 'newspack-plugin' ) } ];
+const INTEGRATIONS_BREADCRUMBS = [
+	{ label: __( 'Audience Management', 'newspack-plugin' ) },
+	{ label: __( 'Integrations', 'newspack-plugin' ), url: '#/settings' },
+];
 
 const AudienceIntegrations = ( props, ref ) => {
 	const [ integrations, setIntegrations ] = useState( {} );
