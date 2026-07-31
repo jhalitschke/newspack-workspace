@@ -39,6 +39,26 @@ class Newspack_Blocks_Caching {
 	private static $current_block_index = 0;
 
 	/**
+	 * Queue of pending background regeneration jobs for this request, keyed by
+	 * a dedup key derived from the block's identity (cache group + cache key
+	 * with the per-request instance index stripped). Each job is an array:
+	 * [ 'block_data' => array, 'cache_group' => string, 'cache_keys' => string[], 'lock_key' => string ].
+	 *
+	 * @var array<string, array>
+	 */
+	private static $regeneration_queue = [];
+
+	/**
+	 * True only while regenerate_stale_blocks() is forcing a fresh render_block()
+	 * call for a queued job, so that pre_render_block doesn't short-circuit it
+	 * with the stale content being replaced, and render_block doesn't re-cache
+	 * under the normal (soft TTL) logic.
+	 *
+	 * @var bool
+	 */
+	private static $is_regenerating = false;
+
+	/**
 	 * Add hooks and filters.
 	 */
 	public static function init() {
@@ -53,6 +73,7 @@ class Newspack_Blocks_Caching {
 			add_action( 'template_redirect', [ __CLASS__, 'check_all_blocks_cache_status' ] );
 			add_filter( 'pre_render_block', [ __CLASS__, 'maybe_serve_cached_block' ], 10, 2 );
 			add_filter( 'render_block', [ __CLASS__, 'maybe_cache_block' ], 9999, 2 );
+			add_action( 'shutdown', [ __CLASS__, 'regenerate_stale_blocks' ] );
 
 			/**
 			 * Cache duration in seconds for Newspack blocks (Homepage Posts, etc.).
@@ -68,6 +89,45 @@ class Newspack_Blocks_Caching {
 			 */
 			if ( ! defined( 'NEWSPACK_BLOCKS_CACHE_BLOCKS_TIME' ) ) {
 				define( 'NEWSPACK_BLOCKS_CACHE_BLOCKS_TIME', 120 );
+			}
+
+			/**
+			 * Hard TTL in seconds for cached Newspack blocks. Once a cached entry is
+			 * older than this, it is discarded entirely and rendered synchronously,
+			 * instead of being served stale while a background regeneration runs.
+			 *
+			 * @constant NEWSPACK_BLOCKS_CACHE_HARD_TTL
+			 * @type     int
+			 * @default  DAY_IN_SECONDS (24 hours)
+			 * @status   draft
+			 *
+			 * @example define( 'NEWSPACK_BLOCKS_CACHE_HARD_TTL', 12 * HOUR_IN_SECONDS );
+			 */
+			if ( ! defined( 'NEWSPACK_BLOCKS_CACHE_HARD_TTL' ) ) {
+				define( 'NEWSPACK_BLOCKS_CACHE_HARD_TTL', DAY_IN_SECONDS );
+			}
+
+			/**
+			 * TTL in seconds of the short-lived lock used to prevent concurrent
+			 * requests from duplicating background regeneration work for the same
+			 * stale block. Cold renders of these blocks have been measured taking
+			 * 22-130 seconds in production-like conditions, so 150 seconds
+			 * comfortably covers worst-case render time before another request
+			 * would be allowed to duplicate the regeneration work. A try/catch
+			 * around the regeneration render call deletes the lock immediately on
+			 * failure, so a stuck lock only lasts the full TTL in the rare case of
+			 * an unrecoverable process death (e.g. an OOM kill) rather than an
+			 * ordinary caught exception.
+			 *
+			 * @constant NEWSPACK_BLOCKS_CACHE_REGEN_LOCK_TTL
+			 * @type     int
+			 * @default  150 (two and a half minutes)
+			 * @status   draft
+			 *
+			 * @example define( 'NEWSPACK_BLOCKS_CACHE_REGEN_LOCK_TTL', 200 );
+			 */
+			if ( ! defined( 'NEWSPACK_BLOCKS_CACHE_REGEN_LOCK_TTL' ) ) {
+				define( 'NEWSPACK_BLOCKS_CACHE_REGEN_LOCK_TTL', 150 );
 			}
 		}
 	}
@@ -217,14 +277,20 @@ class Newspack_Blocks_Caching {
 			return false;
 		}
 
-		// Double-check to make sure cached data is still valid.
-		if ( $cached_data['timestamp_generated'] + NEWSPACK_BLOCKS_CACHE_BLOCKS_TIME < time() ) {
+		// Discard entries past the hard TTL entirely; they're too stale to serve at all.
+		if ( $cached_data['timestamp_generated'] + NEWSPACK_BLOCKS_CACHE_HARD_TTL < time() ) {
 			if ( class_exists( 'Newspack\Logger' ) ) {
-				Newspack\Logger::log( sprintf( 'Flushing cache for item %s in group %s because it expired', $cache_key, $cache_group ) );
+				Newspack\Logger::log( sprintf( 'Flushing cache for item %s in group %s because it exceeded the hard TTL', $cache_key, $cache_group ) );
 			}
 			wp_cache_delete( $cache_key, $cache_group );
 			return false;
 		}
+
+		// Past the soft TTL, the entry is stale: still servable, but a background regeneration should be queued.
+		$cached_data['is_stale']    = ( $cached_data['timestamp_generated'] + NEWSPACK_BLOCKS_CACHE_BLOCKS_TIME < time() );
+		$cached_data['cache_key']   = $cache_key;
+		$cached_data['cache_group'] = $cache_group;
+
 		self::debug_log( sprintf( 'Found cached block: item %s in group %s', $cache_key, $cache_group ) );
 		return $cached_data;
 	}
@@ -237,6 +303,11 @@ class Newspack_Blocks_Caching {
 	 * @return string|null Block markup if served from cache. Default (usually null), otherwise.
 	 */
 	public static function maybe_serve_cached_block( $block_html, $block_data ) {
+		// While forcing a fresh render for a queued regeneration job, never short-circuit with stale content.
+		if ( self::$is_regenerating ) {
+			return $block_html;
+		}
+
 		if ( ! self::should_cache_block( $block_data ) ) {
 			return $block_html;
 		}
@@ -252,6 +323,10 @@ class Newspack_Blocks_Caching {
 			return $block_html;
 		}
 
+		if ( ! empty( $cached_data['is_stale'] ) ) {
+			self::queue_regeneration( $block_data, $cached_data['cache_key'], $cached_data['cache_group'] );
+		}
+
 		if ( 'newspack-blocks/homepage-articles' === $block_data['blockName'] ) {
 			Newspack_Blocks::enqueue_view_assets( 'homepage-articles' );
 		} elseif ( 'newspack-blocks/carousel' === $block_data['blockName'] ) {
@@ -259,6 +334,92 @@ class Newspack_Blocks_Caching {
 		}
 
 		return $cached_data['cached_content'];
+	}
+
+	/**
+	 * Queue a background regeneration job for a stale cached block, deduping on
+	 * the block's identity (not the raw, per-instance cache key) so that multiple
+	 * occurrences of an identical block configuration on the same page only
+	 * trigger one regeneration render, while still refreshing every instance's
+	 * own cache entry once that render completes.
+	 *
+	 * @param array  $block_data  Parsed block data.
+	 * @param string $cache_key   The specific cache key for this block instance.
+	 * @param string $cache_group The cache group for this block instance.
+	 */
+	protected static function queue_regeneration( $block_data, $cache_key, $cache_group ) {
+		// The raw cache key has an ever-incrementing per-request instance index appended,
+		// so strip it to dedupe on the block's actual identity (attributes + cache group).
+		$dedup_key = $cache_group . '_' . preg_replace( '/_\d+$/', '', $cache_key );
+
+		if ( isset( self::$regeneration_queue[ $dedup_key ] ) ) {
+			self::$regeneration_queue[ $dedup_key ]['cache_keys'][] = $cache_key;
+			return;
+		}
+
+		$lock_key = 'lock_' . $dedup_key;
+		if ( ! wp_cache_add( $lock_key, 1, $cache_group, NEWSPACK_BLOCKS_CACHE_REGEN_LOCK_TTL ) ) { // phpcs:ignore WordPressVIPMinimum.Performance.LowExpiryCacheTime.CacheTimeUndetermined
+			// Another request already holds the lock and is regenerating this block.
+			return;
+		}
+
+		self::$regeneration_queue[ $dedup_key ] = [
+			'block_data'  => $block_data,
+			'cache_group' => $cache_group,
+			'cache_keys'  => [ $cache_key ],
+			'lock_key'    => $lock_key,
+		];
+	}
+
+	/**
+	 * Regenerate any stale blocks queued during this request. Runs on 'shutdown',
+	 * after the response has already been sent to the client (via
+	 * fastcgi_finish_request(), if available), so this work doesn't add to the
+	 * page's perceived load time.
+	 */
+	public static function regenerate_stale_blocks() {
+		if ( empty( self::$regeneration_queue ) ) {
+			return;
+		}
+
+		if ( function_exists( 'fastcgi_finish_request' ) ) {
+			fastcgi_finish_request();
+		}
+
+		self::$is_regenerating = true;
+
+		foreach ( self::$regeneration_queue as $dedup_key => $job ) {
+			try {
+				$fresh_html = render_block( $job['block_data'] );
+			} catch ( \Throwable $error ) {
+				if ( class_exists( 'Newspack\Logger' ) ) {
+					Newspack\Logger::log(
+						sprintf(
+							'Failed to regenerate stale block %s in group %s: %s',
+							$dedup_key,
+							$job['cache_group'],
+							$error->getMessage()
+						)
+					);
+				}
+				// Delete the lock immediately so a future request can retry without waiting out the full TTL.
+				// Leave the existing stale cache entries untouched so they remain servable.
+				wp_cache_delete( $job['lock_key'], $job['cache_group'] );
+				continue;
+			}
+
+			$cache_data = [
+				'timestamp_generated' => time(),
+				'cached_content'      => $fresh_html,
+			];
+			foreach ( $job['cache_keys'] as $cache_key ) {
+				wp_cache_set( $cache_key, $cache_data, $job['cache_group'], NEWSPACK_BLOCKS_CACHE_HARD_TTL ); // phpcs:ignore WordPressVIPMinimum.Performance.LowExpiryCacheTime.CacheTimeUndetermined
+			}
+			wp_cache_delete( $job['lock_key'], $job['cache_group'] );
+		}
+
+		self::$is_regenerating    = false;
+		self::$regeneration_queue = [];
 	}
 
 	/**
@@ -270,6 +431,13 @@ class Newspack_Blocks_Caching {
 	 * @return string Unmodified $block_html.
 	 */
 	public static function maybe_cache_block( $block_html, $block_data ) {
+		// The regeneration path writes the cache itself under the frozen set of cache
+		// keys captured when the job was queued; don't let this normal caching path
+		// overwrite it (and potentially miss some of those keys).
+		if ( self::$is_regenerating ) {
+			return $block_html;
+		}
+
 		if ( ! self::should_cache_block( $block_data ) ) {
 			return $block_html;
 		}
@@ -281,7 +449,10 @@ class Newspack_Blocks_Caching {
 			'timestamp_generated' => time(),
 			'cached_content'      => $block_html,
 		];
-		wp_cache_set( $cache_key, $cache_data, $cache_group, NEWSPACK_BLOCKS_CACHE_BLOCKS_TIME ); // phpcs:ignore WordPressVIPMinimum.Performance.LowExpiryCacheTime.CacheTimeUndetermined
+		// Store with the hard TTL: staleness against the soft TTL is judged on read in
+		// get_cached_block_data(), so a stale-but-not-yet-regenerated entry needs to
+		// still be present in cache in order to be served.
+		wp_cache_set( $cache_key, $cache_data, $cache_group, NEWSPACK_BLOCKS_CACHE_HARD_TTL ); // phpcs:ignore WordPressVIPMinimum.Performance.LowExpiryCacheTime.CacheTimeUndetermined
 
 		self::debug_log( sprintf( 'Caching block: item %s in group %s', $cache_key, $cache_group ) );
 
