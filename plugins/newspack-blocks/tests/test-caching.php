@@ -608,6 +608,45 @@ class CachingTest extends WP_UnitTestCase { // phpcs:ignore
 	}
 
 	/**
+	 * A scheduled job outlives the request that queued it, so it can arrive from a
+	 * plugin version that built a different payload. A job missing a field the
+	 * worker relies on must be dropped, not half-processed.
+	 */
+	public function test_malformed_scheduled_job_is_dropped() {
+		$block_data = $this->get_renderable_block_data( 'should not be written' );
+		$cache_key  = 'np_cached_block_malformed_0';
+
+		wp_cache_set(
+			$cache_key,
+			[
+				'timestamp_generated' => time() - 1000,
+				'cached_content'      => '<p>untouched</p>',
+			],
+			self::CACHE_GROUP_FOR_TEST,
+			NEWSPACK_BLOCKS_CACHE_HARD_TTL
+		);
+
+		$job = $this->make_job( $block_data, [ $cache_key ], 'lock_whatever' );
+
+		foreach ( [ 'lock_key', 'cache_group', 'cache_keys', 'block_data' ] as $missing_field ) {
+			$broken = $job;
+			unset( $broken[ $missing_field ] );
+
+			Newspack_Blocks_Caching::handle_regeneration_job( $broken );
+
+			$cached = wp_cache_get( $cache_key, self::CACHE_GROUP_FOR_TEST );
+			$this->assertSame(
+				'<p>untouched</p>',
+				$cached['cached_content'],
+				sprintf( 'A job missing %s must be dropped without touching the cache.', $missing_field )
+			);
+		}
+
+		Newspack_Blocks_Caching::handle_regeneration_job( 'not an array at all' );
+		$this->assertSame( '<p>untouched</p>', wp_cache_get( $cache_key, self::CACHE_GROUP_FOR_TEST )['cached_content'] );
+	}
+
+	/**
 	 * If the render throws, the failure must not propagate, the existing stale
 	 * entry must survive so it stays servable, and the lock must be released
 	 * immediately rather than blocking retries for its full TTL.

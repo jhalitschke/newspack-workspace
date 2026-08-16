@@ -234,15 +234,18 @@ class Newspack_Blocks_Caching {
 	 * @return bool True if Action Scheduler should be used.
 	 */
 	protected static function use_action_scheduler() {
-		$use = function_exists( 'as_enqueue_async_action' );
+		if ( ! function_exists( 'as_enqueue_async_action' ) ) {
+			return false;
+		}
 
 		/**
 		 * Filters whether stale block regeneration is dispatched via Action Scheduler.
+		 * Only consulted when Action Scheduler is actually available, so the filter can
+		 * opt out of it but never into a function that doesn't exist.
 		 *
-		 * @param bool $use Whether to use Action Scheduler. Default true when Action
-		 *                  Scheduler is available.
+		 * @param bool $use Whether to use Action Scheduler. Default true.
 		 */
-		return (bool) apply_filters( 'newspack_blocks_cache_use_action_scheduler', $use );
+		return (bool) apply_filters( 'newspack_blocks_cache_use_action_scheduler', true );
 	}
 
 	/**
@@ -497,13 +500,18 @@ class Newspack_Blocks_Caching {
 	}
 
 	/**
-	 * Claim the right to regenerate a given block, atomically, so that concurrent
-	 * requests finding the same stale entry don't all render it.
+	 * Claim the right to regenerate a given block, so that concurrent requests
+	 * finding the same stale entry don't all render it.
 	 *
-	 * Note that wp_cache_add() is only atomic across requests when a persistent
-	 * object cache drop-in is installed; without one it is request-local and would
-	 * let every concurrent request think it won the lock. Fall back to a transient
-	 * in that case, mirroring Newspack's rate-limiting helper.
+	 * Behind a persistent object cache this is a real lock: wp_cache_add() is
+	 * atomic across requests. Without one, wp_cache_add() is request-local and
+	 * would let every concurrent request think it won, so this falls back to a
+	 * transient. That fallback is best-effort, not atomic — two requests can read
+	 * "unlocked" before either writes. It is left deliberately simple, because a
+	 * site with no persistent object cache has no cross-request block cache
+	 * either: wp_cache_set() doesn't outlive the request, so no entry is ever
+	 * found stale by a *later* request, and the in-request queue already dedupes
+	 * within a single render.
 	 *
 	 * @param string $lock_key    Lock cache key.
 	 * @param string $cache_group Cache group the lock lives in.
@@ -587,8 +595,14 @@ class Newspack_Blocks_Caching {
 	 * @param array $job Queued job, as built by queue_regeneration().
 	 */
 	public static function handle_regeneration_job( $job ) {
-		if ( ! is_array( $job ) || empty( $job['block_data'] ) || empty( $job['cache_keys'] ) || empty( $job['cache_group'] ) ) {
-			return;
+		// A scheduled job outlives the request that queued it, so it can arrive from a
+		// plugin version that built a different payload. Anything missing a field the
+		// worker relies on is dropped rather than half-processed — in particular a job
+		// without a lock key could never release the lock it was queued under.
+		foreach ( [ 'block_data', 'cache_keys', 'cache_group', 'lock_key' ] as $required ) {
+			if ( ! is_array( $job ) || empty( $job[ $required ] ) ) {
+				return;
+			}
 		}
 		self::regenerate_job( $job );
 	}
