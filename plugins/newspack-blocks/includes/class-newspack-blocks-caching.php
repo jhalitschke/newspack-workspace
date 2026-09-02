@@ -108,66 +108,78 @@ class Newspack_Blocks_Caching {
 	 * Initialize block caching if needed.
 	 */
 	public static function setup_block_caching() {
+		// Defined unconditionally: a background regeneration job runs through
+		// Action Scheduler, WP-Cron or WP-CLI, in a request that may not pass the
+		// front-end gate below, and the job still has to know the TTLs it caches
+		// and locks with.
+		self::define_cache_constants();
+
 		if ( ! is_user_logged_in() || ! current_user_can( 'edit_posts' ) ) {
 			add_action( 'template_redirect', [ __CLASS__, 'check_all_blocks_cache_status' ] );
 			add_filter( 'pre_render_block', [ __CLASS__, 'maybe_serve_cached_block' ], 10, 2 );
 			add_filter( 'render_block', [ __CLASS__, 'maybe_cache_block' ], 9999, 2 );
 			add_action( 'shutdown', [ __CLASS__, 'regenerate_stale_blocks' ] );
+		}
+	}
 
-			/**
-			 * Cache duration in seconds for Newspack blocks (Homepage Posts, etc.).
-			 * Blocks are cached for non-logged-in users to improve performance.
-			 * Set to 0 to disable caching.
-			 *
-			 * @constant NEWSPACK_BLOCKS_CACHE_BLOCKS_TIME
-			 * @type     int
-			 * @default  120 (two minutes)
-			 * @status   draft
-			 *
-			 * @example define( 'NEWSPACK_BLOCKS_CACHE_BLOCKS_TIME', 300 );
-			 */
-			if ( ! defined( 'NEWSPACK_BLOCKS_CACHE_BLOCKS_TIME' ) ) {
-				define( 'NEWSPACK_BLOCKS_CACHE_BLOCKS_TIME', 120 );
-			}
+	/**
+	 * Define the caching layer's configuration constants, unless a site has
+	 * already defined them.
+	 */
+	protected static function define_cache_constants() {
+		/**
+		 * Cache duration in seconds for Newspack blocks (Homepage Posts, etc.).
+		 * Blocks are cached for non-logged-in users to improve performance.
+		 * Set to 0 to disable caching.
+		 *
+		 * @constant NEWSPACK_BLOCKS_CACHE_BLOCKS_TIME
+		 * @type     int
+		 * @default  120 (two minutes)
+		 * @status   draft
+		 *
+		 * @example define( 'NEWSPACK_BLOCKS_CACHE_BLOCKS_TIME', 300 );
+		 */
+		if ( ! defined( 'NEWSPACK_BLOCKS_CACHE_BLOCKS_TIME' ) ) {
+			define( 'NEWSPACK_BLOCKS_CACHE_BLOCKS_TIME', 120 );
+		}
 
-			/**
-			 * Hard TTL in seconds for cached Newspack blocks. Once a cached entry is
-			 * older than this, it is discarded entirely and rendered synchronously,
-			 * instead of being served stale while a background regeneration runs.
-			 *
-			 * @constant NEWSPACK_BLOCKS_CACHE_HARD_TTL
-			 * @type     int
-			 * @default  DAY_IN_SECONDS (24 hours)
-			 * @status   draft
-			 *
-			 * @example define( 'NEWSPACK_BLOCKS_CACHE_HARD_TTL', 12 * HOUR_IN_SECONDS );
-			 */
-			if ( ! defined( 'NEWSPACK_BLOCKS_CACHE_HARD_TTL' ) ) {
-				define( 'NEWSPACK_BLOCKS_CACHE_HARD_TTL', DAY_IN_SECONDS );
-			}
+		/**
+		 * Hard TTL in seconds for cached Newspack blocks. Once a cached entry is
+		 * older than this, it is discarded entirely and rendered synchronously,
+		 * instead of being served stale while a background regeneration runs.
+		 *
+		 * @constant NEWSPACK_BLOCKS_CACHE_HARD_TTL
+		 * @type     int
+		 * @default  DAY_IN_SECONDS (24 hours)
+		 * @status   draft
+		 *
+		 * @example define( 'NEWSPACK_BLOCKS_CACHE_HARD_TTL', 12 * HOUR_IN_SECONDS );
+		 */
+		if ( ! defined( 'NEWSPACK_BLOCKS_CACHE_HARD_TTL' ) ) {
+			define( 'NEWSPACK_BLOCKS_CACHE_HARD_TTL', DAY_IN_SECONDS );
+		}
 
-			/**
-			 * TTL in seconds of the short-lived lock used to prevent concurrent
-			 * requests from duplicating background regeneration work for the same
-			 * stale block. Cold renders of these blocks have been measured taking
-			 * 22-130 seconds in production-like conditions, so 150 seconds
-			 * comfortably covers worst-case render time before another request
-			 * would be allowed to duplicate the regeneration work. Every exit path
-			 * from a regeneration job releases the lock explicitly — including a
-			 * render that throws, and the case where no background mechanism is
-			 * available at all — so a lock only survives to its TTL after an
-			 * unrecoverable process death (e.g. an OOM kill).
-			 *
-			 * @constant NEWSPACK_BLOCKS_CACHE_REGEN_LOCK_TTL
-			 * @type     int
-			 * @default  150 (two and a half minutes)
-			 * @status   draft
-			 *
-			 * @example define( 'NEWSPACK_BLOCKS_CACHE_REGEN_LOCK_TTL', 200 );
-			 */
-			if ( ! defined( 'NEWSPACK_BLOCKS_CACHE_REGEN_LOCK_TTL' ) ) {
-				define( 'NEWSPACK_BLOCKS_CACHE_REGEN_LOCK_TTL', 150 );
-			}
+		/**
+		 * TTL in seconds of the short-lived lock used to prevent concurrent
+		 * requests from duplicating background regeneration work for the same
+		 * stale block. Cold renders of these blocks have been measured taking
+		 * 22-130 seconds in production-like conditions, so 150 seconds
+		 * comfortably covers worst-case render time before another request
+		 * would be allowed to duplicate the regeneration work. Every exit path
+		 * from a regeneration job releases the lock explicitly — including a
+		 * render that throws, a dispatch that fails, and the case where no
+		 * background mechanism is available at all — so a lock only survives to
+		 * its TTL after an unrecoverable process death (e.g. an OOM kill).
+		 *
+		 * @constant NEWSPACK_BLOCKS_CACHE_REGEN_LOCK_TTL
+		 * @type     int
+		 * @default  150 (two and a half minutes)
+		 * @status   draft
+		 *
+		 * @example define( 'NEWSPACK_BLOCKS_CACHE_REGEN_LOCK_TTL', 200 );
+		 */
+		if ( ! defined( 'NEWSPACK_BLOCKS_CACHE_REGEN_LOCK_TTL' ) ) {
+			define( 'NEWSPACK_BLOCKS_CACHE_REGEN_LOCK_TTL', 150 );
 		}
 	}
 
@@ -567,10 +579,32 @@ class Newspack_Blocks_Caching {
 		self::$regeneration_queue = [];
 
 		if ( self::use_action_scheduler() ) {
+			$scheduled = 0;
 			foreach ( $queue as $job ) {
-				as_enqueue_async_action( self::REGENERATION_AS_HOOK, [ $job ], self::REGENERATION_AS_GROUP );
+				// Enqueueing can fail: Action Scheduler rejects a payload whose
+				// JSON-encoded args exceed its args-column limit, and the store can
+				// throw on a database error. An uncaught throw here would abandon
+				// every job still in the queue and leave all of their locks held for
+				// the lock TTL, so failures are contained per job: release the lock
+				// and leave the stale entry servable for the next request to retry.
+				try {
+					as_enqueue_async_action( self::REGENERATION_AS_HOOK, [ $job ], self::REGENERATION_AS_GROUP );
+					++$scheduled;
+				} catch ( \Throwable $error ) {
+					self::release_regeneration_lock( $job['lock_key'], $job['cache_group'] );
+					if ( class_exists( 'Newspack\Logger' ) ) {
+						Newspack\Logger::log(
+							sprintf(
+								'Failed to schedule regeneration of stale block %s in group %s: %s',
+								$job['lock_key'],
+								$job['cache_group'],
+								$error->getMessage()
+							)
+						);
+					}
+				}
 			}
-			self::debug_log( sprintf( 'Scheduled %d stale block regeneration job(s).', count( $queue ) ) );
+			self::debug_log( sprintf( 'Scheduled %d stale block regeneration job(s).', $scheduled ) );
 			return;
 		}
 
@@ -599,10 +633,19 @@ class Newspack_Blocks_Caching {
 		// plugin version that built a different payload. Anything missing a field the
 		// worker relies on is dropped rather than half-processed — in particular a job
 		// without a lock key could never release the lock it was queued under.
+		if ( ! is_array( $job ) ) {
+			return;
+		}
 		foreach ( [ 'block_data', 'cache_keys', 'cache_group', 'lock_key' ] as $required ) {
-			if ( ! is_array( $job ) || empty( $job[ $required ] ) ) {
+			if ( empty( $job[ $required ] ) ) {
 				return;
 			}
+		}
+		// render_block() expects parsed block data and the cache write iterates the
+		// keys, so a payload carrying the right field names with the wrong shape is
+		// dropped too rather than fataling in the worker.
+		if ( ! is_array( $job['block_data'] ) || ! is_array( $job['cache_keys'] ) ) {
+			return;
 		}
 		self::regenerate_job( $job );
 	}
