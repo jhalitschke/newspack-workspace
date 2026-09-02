@@ -223,6 +223,7 @@ class CachingTest extends WP_UnitTestCase { // phpcs:ignore
 			'regeneration_queue'  => [],
 			'is_regenerating'     => false,
 			'current_block_index' => 0,
+			'content_changed_at'  => null,
 			'can_serve_all_blocks_from_cache' => true,
 		] as $property_name => $default ) {
 			$property = $reflection->getProperty( $property_name );
@@ -525,6 +526,174 @@ class CachingTest extends WP_UnitTestCase { // phpcs:ignore
 			$this->get_static_property( 'regeneration_queue' ),
 			'A second request must not queue a duplicate job while the lock is held.'
 		);
+	}
+
+	/**
+	 * Age alone can't tell a correct entry from a wrong one. A publish must make a
+	 * still-young entry stale, so it is refreshed in the background instead of
+	 * being served unchanged until the soft TTL happens to expire.
+	 */
+	public function test_publishing_makes_a_young_entry_stale() {
+		$this->go_to_singular_post();
+
+		$block_data = $this->get_cacheable_block_data( [ 'publish-test' => true ] );
+		// Well inside the soft TTL: without the content marker this entry would not
+		// be stale at all.
+		$this->seed_cache_entry( $block_data, 5, '<div>content from before the publish</div>' );
+
+		Newspack_Blocks_Caching::record_content_change( 'publish', 'draft' );
+
+		$served = Newspack_Blocks_Caching::maybe_serve_cached_block( null, $block_data );
+
+		$this->assertSame( '<div>content from before the publish</div>', $served, 'The entry is still served, immediately.' );
+		$this->assertCount(
+			1,
+			$this->get_static_property( 'regeneration_queue' ),
+			'A publish should queue a background regeneration for an otherwise fresh entry.'
+		);
+	}
+
+	/**
+	 * The grace window bounds how long a wrong entry may be served. Once it has
+	 * passed without anything refreshing the entry, the request must fall back to
+	 * rendering synchronously rather than serving content known to be out of date.
+	 */
+	public function test_outdated_entry_past_the_grace_window_is_discarded() {
+		$this->go_to_singular_post();
+
+		$block_data = $this->get_cacheable_block_data( [ 'grace-test' => true ] );
+
+		// Rendered before the change, and the change is older than the grace window.
+		list( $cache_key, $cache_group ) = $this->seed_cache_entry( $block_data, NEWSPACK_BLOCKS_CACHE_STALE_GRACE + 60, '<div>out of date</div>' );
+
+		$this->set_static_property( 'content_changed_at', time() - ( NEWSPACK_BLOCKS_CACHE_STALE_GRACE + 30 ) );
+
+		$this->assertFalse(
+			Newspack_Blocks_Caching::get_cached_block_data( $block_data ),
+			'An entry whose content changed before the grace window must not be served.'
+		);
+		$this->assertFalse(
+			wp_cache_get( $cache_key, $cache_group ),
+			'The unusable entry should be dropped from the cache.'
+		);
+	}
+
+	/**
+	 * Falling back to a synchronous render while a background regeneration is
+	 * already claimed for the same block would duplicate exactly the work this
+	 * layer exists to avoid. The grace window must not override a held lock.
+	 */
+	public function test_outdated_entry_is_still_served_while_a_regeneration_is_in_flight() {
+		$this->go_to_singular_post();
+
+		$block_data = $this->get_cacheable_block_data( [ 'in-flight-test' => true ] );
+
+		list( $cache_key, $cache_group ) = $this->seed_cache_entry( $block_data, NEWSPACK_BLOCKS_CACHE_STALE_GRACE + 60, '<div>out of date</div>' );
+
+		$this->set_static_property( 'content_changed_at', time() - ( NEWSPACK_BLOCKS_CACHE_STALE_GRACE + 30 ) );
+		$this->invoke_static_method(
+			'acquire_regeneration_lock',
+			[ $this->invoke_static_method( 'get_regeneration_lock_key', [ $cache_key, $cache_group ] ), $cache_group ]
+		);
+
+		$cached = Newspack_Blocks_Caching::get_cached_block_data( $block_data );
+
+		$this->assertIsArray( $cached, 'The entry must keep being served while its regeneration runs.' );
+		$this->assertSame( '<div>out of date</div>', $cached['cached_content'] );
+		$this->assertIsArray(
+			wp_cache_get( $cache_key, $cache_group ),
+			'The entry must not be dropped out from under the running regeneration.'
+		);
+	}
+
+	/**
+	 * The flip side: on a site where nothing has been published, an old entry is
+	 * still exactly right. It must keep being served — falling back to synchronous
+	 * renders on a quiet site is the behavior this whole layer exists to avoid.
+	 */
+	public function test_old_entry_is_still_served_when_no_content_changed() {
+		$this->go_to_singular_post();
+
+		$block_data = $this->get_cacheable_block_data( [ 'quiet-site-test' => true ] );
+		$this->seed_cache_entry( $block_data, NEWSPACK_BLOCKS_CACHE_BLOCKS_TIME * 50, '<div>still correct</div>' );
+
+		$served = Newspack_Blocks_Caching::maybe_serve_cached_block( null, $block_data );
+
+		$this->assertSame( '<div>still correct</div>', $served, 'With no content change recorded, an old entry stays servable.' );
+		$this->assertCount( 1, $this->get_static_property( 'regeneration_queue' ), 'It is still refreshed in the background.' );
+	}
+
+	/**
+	 * Only transitions into or out of 'publish' change what these blocks query.
+	 * Saving a draft or trimming a revision must not invalidate anything.
+	 */
+	public function test_unpublished_changes_do_not_move_the_marker() {
+		Newspack_Blocks_Caching::record_content_change( 'draft', 'auto-draft' );
+		$this->assertSame(
+			0,
+			$this->invoke_static_method( 'get_content_changed_at', [] ),
+			'A draft transition must not record a content change.'
+		);
+
+		$revision_id = self::factory()->post->create( [ 'post_status' => 'inherit' ] );
+		Newspack_Blocks_Caching::record_content_deletion( $revision_id, get_post( $revision_id ) );
+		$this->assertSame(
+			0,
+			$this->invoke_static_method( 'get_content_changed_at', [] ),
+			'Deleting unpublished content must not record a content change.'
+		);
+
+		$published_id = self::factory()->post->create( [ 'post_status' => 'publish' ] );
+		Newspack_Blocks_Caching::record_content_deletion( $published_id, get_post( $published_id ) );
+		$this->assertGreaterThan(
+			0,
+			$this->invoke_static_method( 'get_content_changed_at', [] ),
+			'Deleting published content must record a content change.'
+		);
+	}
+
+	/**
+	 * On the inline fallback path the response is detached but the PHP worker is
+	 * not. A page whose blocks all go stale at once — what a publish does — must
+	 * not occupy that worker for the sum of every cold render; the jobs over the
+	 * limit release their locks for a later request to pick up.
+	 *
+	 * Exercises the inline loop directly: reaching it through regenerate_stale_blocks()
+	 * would need fastcgi_finish_request(), which the CLI SAPI running these tests
+	 * does not have.
+	 */
+	public function test_inline_regeneration_is_capped_per_request() {
+		$cap = function () {
+			return 1;
+		};
+		add_filter( 'newspack_blocks_cache_max_inline_regenerations', $cap );
+
+		$block_data = $this->get_renderable_block_data( 'inline regenerated' );
+		$queue      = [];
+		$lock_keys  = [];
+		foreach ( [ 'first', 'second' ] as $name ) {
+			$lock_key           = 'lock_' . self::CACHE_GROUP_FOR_TEST . '_np_cached_block_' . $name;
+			$lock_keys[ $name ] = $lock_key;
+			$this->invoke_static_method( 'acquire_regeneration_lock', [ $lock_key, self::CACHE_GROUP_FOR_TEST ] );
+			$queue[ $name ] = $this->make_job( $block_data, [ 'np_cached_block_' . $name . '_0' ], $lock_key );
+		}
+
+		$this->invoke_static_method( 'regenerate_queue_inline', [ $queue ] );
+
+		$this->assertIsArray(
+			wp_cache_get( 'np_cached_block_first_0', self::CACHE_GROUP_FOR_TEST ),
+			'The job within the limit should have been regenerated.'
+		);
+		$this->assertFalse(
+			wp_cache_get( 'np_cached_block_second_0', self::CACHE_GROUP_FOR_TEST ),
+			'The job over the limit must not run.'
+		);
+		$this->assertFalse(
+			$this->lock_is_held( $lock_keys['second'], self::CACHE_GROUP_FOR_TEST ),
+			'A skipped job must release its lock so a later request can pick it up.'
+		);
+
+		remove_filter( 'newspack_blocks_cache_max_inline_regenerations', $cap );
 	}
 
 	/**
