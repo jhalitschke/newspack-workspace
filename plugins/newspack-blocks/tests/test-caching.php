@@ -33,12 +33,21 @@ class CachingTest extends WP_UnitTestCase { // phpcs:ignore
 	public static $scheduled_actions = [];
 
 	/**
+	 * Lock keys the Action Scheduler stub in this file should throw for, so the
+	 * dispatch-failure path can be exercised.
+	 *
+	 * @var array<int, string>
+	 */
+	public static $scheduling_fails_for = [];
+
+	/**
 	 * Reset the class's static state and this file's Action Scheduler recorder
 	 * before each test, so queues, locks and index counters don't leak between tests.
 	 */
 	public function set_up() {
 		parent::set_up();
-		self::$scheduled_actions = [];
+		self::$scheduled_actions    = [];
+		self::$scheduling_fails_for = [];
 		$this->reset_caching_static_state();
 	}
 
@@ -525,6 +534,50 @@ class CachingTest extends WP_UnitTestCase { // phpcs:ignore
 	}
 
 	/**
+	 * On the inline fallback path the response is detached but the PHP worker is
+	 * not. A page whose blocks all go stale at once — what a publish does — must
+	 * not occupy that worker for the sum of every cold render; the jobs over the
+	 * limit release their locks for a later request to pick up.
+	 *
+	 * Exercises the inline loop directly: reaching it through regenerate_stale_blocks()
+	 * would need fastcgi_finish_request(), which the CLI SAPI running these tests
+	 * does not have.
+	 */
+	public function test_inline_regeneration_is_capped_per_request() {
+		$cap = function () {
+			return 1;
+		};
+		add_filter( 'newspack_blocks_cache_max_inline_regenerations', $cap );
+
+		$block_data = $this->get_renderable_block_data( 'inline regenerated' );
+		$queue      = [];
+		$lock_keys  = [];
+		foreach ( [ 'first', 'second' ] as $name ) {
+			$lock_key           = 'lock_' . self::CACHE_GROUP_FOR_TEST . '_np_cached_block_' . $name;
+			$lock_keys[ $name ] = $lock_key;
+			$this->invoke_static_method( 'acquire_regeneration_lock', [ $lock_key, self::CACHE_GROUP_FOR_TEST ] );
+			$queue[ $name ] = $this->make_job( $block_data, [ 'np_cached_block_' . $name . '_0' ], $lock_key );
+		}
+
+		$this->invoke_static_method( 'regenerate_queue_inline', [ $queue ] );
+
+		$this->assertIsArray(
+			wp_cache_get( 'np_cached_block_first_0', self::CACHE_GROUP_FOR_TEST ),
+			'The job within the limit should have been regenerated.'
+		);
+		$this->assertFalse(
+			wp_cache_get( 'np_cached_block_second_0', self::CACHE_GROUP_FOR_TEST ),
+			'The job over the limit must not run.'
+		);
+		$this->assertFalse(
+			$this->lock_is_held( $lock_keys['second'], self::CACHE_GROUP_FOR_TEST ),
+			'A skipped job must release its lock so a later request can pick it up.'
+		);
+
+		remove_filter( 'newspack_blocks_cache_max_inline_regenerations', $cap );
+	}
+
+	/**
 	 * With Action Scheduler available, the shutdown handler must hand the job off
 	 * rather than rendering inline, and must leave the lock in place for the
 	 * scheduled job to release.
@@ -611,6 +664,74 @@ class CachingTest extends WP_UnitTestCase { // phpcs:ignore
 
 		$this->assertFalse( $this->lock_is_held( $lock_key, self::CACHE_GROUP_FOR_TEST ), 'The lock should be released once the job completes.' );
 		$this->assertFalse( $this->get_static_property( 'is_regenerating' ), 'The is_regenerating flag should be reset after the job.' );
+	}
+
+	/**
+	 * Enqueueing can fail — Action Scheduler rejects an over-long payload and its
+	 * store can throw on a database error. A failure must be contained to the job
+	 * it happened on: its lock is released so a later request can retry, and the
+	 * rest of the queue is still dispatched.
+	 */
+	public function test_failed_dispatch_releases_its_lock_and_keeps_going() {
+		$block_data   = $this->get_renderable_block_data();
+		$failing_lock = 'lock_' . self::CACHE_GROUP_FOR_TEST . '_np_cached_block_toobig';
+		$working_lock = 'lock_' . self::CACHE_GROUP_FOR_TEST . '_np_cached_block_ok';
+		$failing_job  = $this->make_job( $block_data, [ 'np_cached_block_toobig_0' ], $failing_lock );
+		$working_job  = $this->make_job( $block_data, [ 'np_cached_block_ok_0' ], $working_lock );
+
+		self::$scheduling_fails_for = [ $failing_lock ];
+
+		$this->invoke_static_method( 'acquire_regeneration_lock', [ $failing_lock, self::CACHE_GROUP_FOR_TEST ] );
+		$this->invoke_static_method( 'acquire_regeneration_lock', [ $working_lock, self::CACHE_GROUP_FOR_TEST ] );
+		$this->set_static_property(
+			'regeneration_queue',
+			[
+				'dedup_failing' => $failing_job,
+				'dedup_working' => $working_job,
+			]
+		);
+
+		Newspack_Blocks_Caching::regenerate_stale_blocks();
+
+		$this->assertCount( 1, self::$scheduled_actions, 'The job that did not throw should still have been scheduled.' );
+		$this->assertSame( $working_lock, self::$scheduled_actions[0]['args'][0]['lock_key'] );
+
+		$this->assertFalse(
+			$this->lock_is_held( $failing_lock, self::CACHE_GROUP_FOR_TEST ),
+			'A job that could not be scheduled must release its lock, so the next request can retry.'
+		);
+		$this->assertTrue(
+			$this->lock_is_held( $working_lock, self::CACHE_GROUP_FOR_TEST ),
+			'The lock of a successfully scheduled job stays held until that job runs.'
+		);
+	}
+
+	/**
+	 * The regeneration worker is registered outside the front-end gate, so it also
+	 * runs in requests made by logged-in editors (WP-Cron spawned from the admin,
+	 * for instance). Everything it needs — in particular the cache TTLs — has to be
+	 * available there.
+	 */
+	public function test_background_job_runs_when_an_editor_is_logged_in() {
+		wp_set_current_user( self::factory()->user->create( [ 'role' => 'editor' ] ) );
+		Newspack_Blocks_Caching::setup_block_caching();
+
+		$this->assertGreaterThan(
+			0,
+			$this->invoke_static_method( 'get_cache_expiry', [] ),
+			'The worker must be able to determine a cache expiry regardless of who is logged in.'
+		);
+
+		$block_data = $this->get_renderable_block_data( 'refreshed for editor' );
+		$lock_key   = 'lock_' . self::CACHE_GROUP_FOR_TEST . '_np_cached_block_editor';
+		$cache_key  = 'np_cached_block_editor_0';
+
+		$this->invoke_static_method( 'acquire_regeneration_lock', [ $lock_key, self::CACHE_GROUP_FOR_TEST ] );
+		Newspack_Blocks_Caching::handle_regeneration_job( $this->make_job( $block_data, [ $cache_key ], $lock_key ) );
+
+		$cached = wp_cache_get( $cache_key, self::CACHE_GROUP_FOR_TEST );
+		$this->assertIsArray( $cached );
+		$this->assertStringContainsString( 'refreshed for editor', $cached['cached_content'] );
 	}
 
 	/**
@@ -773,6 +894,13 @@ if ( ! function_exists( 'as_enqueue_async_action' ) ) {
 	 * @return int Fake action ID.
 	 */
 	function as_enqueue_async_action( $hook, $args = [], $group = '' ) {
+		$lock_key = isset( $args[0]['lock_key'] ) ? $args[0]['lock_key'] : '';
+		if ( in_array( $lock_key, CachingTest::$scheduling_fails_for, true ) ) {
+			// Mirrors ActionScheduler_DBStore::validate_args(), which throws when a
+			// payload is too large for the store, and the store's own database errors.
+			throw new InvalidArgumentException( 'Action args are too long.' );
+		}
+
 		CachingTest::$scheduled_actions[] = [
 			'hook'  => $hook,
 			'args'  => $args,
