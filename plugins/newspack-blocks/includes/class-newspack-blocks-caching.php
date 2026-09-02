@@ -194,6 +194,15 @@ class Newspack_Blocks_Caching {
 			return false;
 		}
 
+		// "Set to 0 to disable caching" is the documented contract of the soft TTL, and
+		// it works because an entry is then always already older than its own TTL and is
+		// dropped on read. Serving stale would quietly invert that: the entry would be
+		// kept for the whole hard TTL and served — permanently stale — on every request.
+		// Not a misconfiguration to log about, just a setting this layer must respect.
+		if ( NEWSPACK_BLOCKS_CACHE_BLOCKS_TIME <= 0 ) {
+			return false;
+		}
+
 		// A hard TTL below the soft TTL is a misconfiguration: it would mean entries
 		// are discarded before they can ever be served stale. Fall back to the plain
 		// single-TTL behavior rather than acting on contradictory settings.
