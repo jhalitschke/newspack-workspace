@@ -25,6 +25,13 @@ class Newspack_Blocks_Caching {
 	const REGENERATION_AS_GROUP = 'newspack-blocks';
 
 	/**
+	 * Cache key, in self::CACHE_GROUP, holding the timestamp of the last change to
+	 * published content. Used to tell an entry that is merely old from one that is
+	 * actually out of date; see get_content_changed_at().
+	 */
+	const CONTENT_CHANGED_CACHE_KEY = 'content_changed_at';
+
+	/**
 	 * Store the cache status for all blocks for this request.
 	 *
 	 * @var bool
@@ -79,6 +86,14 @@ class Newspack_Blocks_Caching {
 	private static $logged_ttl_misconfiguration = false;
 
 	/**
+	 * Memoized timestamp of the last change to published content, so a page
+	 * carrying many cached blocks reads the marker once. Null until first read.
+	 *
+	 * @var int|null
+	 */
+	private static $content_changed_at = null;
+
+	/**
 	 * Add hooks and filters.
 	 */
 	public static function init() {
@@ -89,6 +104,12 @@ class Newspack_Blocks_Caching {
 		// necessarily wired up, but the queued job still has to be processed.
 		add_action( self::REGENERATION_AS_HOOK, [ __CLASS__, 'handle_regeneration_job' ] );
 		add_filter( 'newspack_action_scheduler_hook_labels', [ __CLASS__, 'register_hook_labels' ] );
+
+		// Also registered outside the front-end gate: content changes happen in the
+		// admin, over the REST API and on cron (a scheduled post going live), none
+		// of which pass that gate, and all of which have to move the marker.
+		add_action( 'transition_post_status', [ __CLASS__, 'record_content_change' ], 10, 2 );
+		add_action( 'deleted_post', [ __CLASS__, 'record_content_deletion' ], 10, 2 );
 	}
 
 	/**
@@ -192,6 +213,98 @@ class Newspack_Blocks_Caching {
 		if ( ! defined( 'NEWSPACK_BLOCKS_CACHE_REGEN_LOCK_TTL' ) ) {
 			define( 'NEWSPACK_BLOCKS_CACHE_REGEN_LOCK_TTL', 150 );
 		}
+
+		/**
+		 * How long, in seconds, an entry may still be served after the content it
+		 * was rendered from changed. Inside this window one background regeneration
+		 * absorbs the whole burst of traffic following a publish; past it the entry
+		 * is discarded and rendered synchronously, because at that point nothing
+		 * has refreshed it and it is not merely old but wrong.
+		 *
+		 * Defaults to the regeneration lock TTL, which is already sized to the
+		 * measured worst-case cold render: the window lasts as long as a
+		 * regeneration triggered by the change could still plausibly be running.
+		 *
+		 * @constant NEWSPACK_BLOCKS_CACHE_STALE_GRACE
+		 * @type     int
+		 * @default  NEWSPACK_BLOCKS_CACHE_REGEN_LOCK_TTL (two and a half minutes)
+		 * @status   draft
+		 *
+		 * @example define( 'NEWSPACK_BLOCKS_CACHE_STALE_GRACE', 5 * MINUTE_IN_SECONDS );
+		 */
+		if ( ! defined( 'NEWSPACK_BLOCKS_CACHE_STALE_GRACE' ) ) {
+			define( 'NEWSPACK_BLOCKS_CACHE_STALE_GRACE', NEWSPACK_BLOCKS_CACHE_REGEN_LOCK_TTL );
+		}
+	}
+
+	/**
+	 * Record that published content changed, so entries rendered before this point
+	 * are treated as out of date rather than merely old.
+	 *
+	 * Hooked to transition_post_status with two arguments, and called with none
+	 * from record_content_deletion(). Only transitions into or out of 'publish'
+	 * matter: drafts, autosaves and revisions don't change what these blocks query.
+	 *
+	 * The marker lives in the object cache rather than an option deliberately. It
+	 * is written on every publish, and an autoloaded option would invalidate the
+	 * whole 'alloptions' cache entry each time — a well-known cost on VIP — while a
+	 * non-autoloaded one would add a query to every front-end request. Losing the
+	 * marker to a cache eviction is harmless: entries then simply fall back to
+	 * being judged on age alone, which is the behavior without this marker.
+	 *
+	 * @param string $new_status New post status. Empty when called directly.
+	 * @param string $old_status Old post status.
+	 */
+	public static function record_content_change( $new_status = '', $old_status = '' ) {
+		if ( '' !== $new_status && 'publish' !== $new_status && 'publish' !== $old_status ) {
+			return;
+		}
+
+		self::$content_changed_at = time();
+		wp_cache_set( self::CONTENT_CHANGED_CACHE_KEY, self::$content_changed_at, self::CACHE_GROUP, 0 );
+	}
+
+	/**
+	 * Record a deletion as a content change, but only for content that was
+	 * published — trimming revisions and emptying the trash of drafts must not
+	 * invalidate anything.
+	 *
+	 * @param int          $post_id Deleted post ID. Unused.
+	 * @param WP_Post|null $post    The deleted post object.
+	 */
+	public static function record_content_deletion( $post_id, $post = null ) {
+		if ( $post instanceof WP_Post && 'publish' !== $post->post_status ) {
+			return;
+		}
+		self::record_content_change();
+	}
+
+	/**
+	 * Timestamp of the last recorded change to published content, or 0 when no
+	 * change has been recorded (or the marker has been evicted).
+	 *
+	 * @return int Unix timestamp.
+	 */
+	protected static function get_content_changed_at() {
+		if ( null === self::$content_changed_at ) {
+			self::$content_changed_at = (int) wp_cache_get( self::CONTENT_CHANGED_CACHE_KEY, self::CACHE_GROUP );
+		}
+		return self::$content_changed_at;
+	}
+
+	/**
+	 * How long an out-of-date entry may still be served stale.
+	 *
+	 * @return int Seconds.
+	 */
+	protected static function get_stale_grace() {
+		/**
+		 * Filters the window during which an entry whose content has changed may
+		 * still be served stale while it is regenerated in the background.
+		 *
+		 * @param int $grace Grace period in seconds.
+		 */
+		return (int) apply_filters( 'newspack_blocks_cache_stale_grace', NEWSPACK_BLOCKS_CACHE_STALE_GRACE );
 	}
 
 	/**
@@ -425,10 +538,40 @@ class Newspack_Blocks_Caching {
 			return false;
 		}
 
+		$generated_at = (int) $cached_data['timestamp_generated'];
+		$swr_enabled  = self::is_swr_enabled();
+
+		// Content published, updated or deleted after this entry was rendered makes
+		// it wrong rather than merely old, and age alone can't tell the two apart:
+		// on a quiet site a day-old entry is still exactly right, while on a busy
+		// one a two-minute-old entry can already be missing the lead story.
+		//
+		// An out-of-date entry is still served for a short grace window, so the
+		// burst of traffic right after a publish is absorbed by a single background
+		// regeneration instead of a synchronous re-render in each request. Past that
+		// window nothing has refreshed it, and it is discarded and rendered
+		// synchronously — exactly what would have happened without this layer.
+		$changed_at  = self::get_content_changed_at();
+		$is_outdated = $swr_enabled && $changed_at > $generated_at;
+
+		if ( $is_outdated && $changed_at + self::get_stale_grace() < time() ) {
+			// ...unless a regeneration is already claimed for this block. Rendering
+			// synchronously alongside it would duplicate the exact work that is
+			// running, which is what this whole layer exists to avoid; keep serving
+			// the entry and let that job replace it.
+			if ( self::regeneration_is_in_flight( $cache_key, $cache_group ) ) {
+				self::debug_log( sprintf( 'Serving out-of-date item %s in group %s: a regeneration is in flight', $cache_key, $cache_group ) );
+			} else {
+				self::debug_log( sprintf( 'Discarding item %s in group %s: content changed and the stale grace window has passed', $cache_key, $cache_group ) );
+				wp_cache_delete( $cache_key, $cache_group );
+				return false;
+			}
+		}
+
 		// Double-check to make sure cached data is still valid. With stale-while-revalidate
 		// active this is the hard TTL, past which an entry is too old to serve at all;
 		// without it, the soft TTL, matching the previous single-TTL behavior.
-		if ( $cached_data['timestamp_generated'] + self::get_cache_expiry() < time() ) {
+		if ( $generated_at + self::get_cache_expiry() < time() ) {
 			if ( class_exists( 'Newspack\Logger' ) ) {
 				Newspack\Logger::log( sprintf( 'Flushing cache for item %s in group %s because it expired', $cache_key, $cache_group ) );
 			}
@@ -436,9 +579,11 @@ class Newspack_Blocks_Caching {
 			return false;
 		}
 
-		// Past the soft TTL, the entry is stale: still servable, but a background regeneration should be queued.
-		$cached_data['is_stale']    = self::is_swr_enabled()
-			&& ( $cached_data['timestamp_generated'] + NEWSPACK_BLOCKS_CACHE_BLOCKS_TIME < time() );
+		// Stale: still servable, but a background regeneration should be queued. An
+		// entry is stale once it is past the soft TTL, or as soon as the content it
+		// was rendered from changed, whichever comes first.
+		$cached_data['is_stale']    = $swr_enabled
+			&& ( $is_outdated || $generated_at + NEWSPACK_BLOCKS_CACHE_BLOCKS_TIME < time() );
 		$cached_data['cache_key']   = $cache_key;
 		$cached_data['cache_group'] = $cache_group;
 
@@ -551,6 +696,22 @@ class Newspack_Blocks_Caching {
 	 */
 	protected static function get_regeneration_lock_key( $cache_key, $cache_group ) {
 		return 'lock_' . self::get_dedup_key( $cache_key, $cache_group );
+	}
+
+	/**
+	 * Whether a regeneration of this block is currently claimed by some request or
+	 * scheduled job.
+	 *
+	 * @param string $cache_key   The specific cache key for a block instance.
+	 * @param string $cache_group The cache group for that block instance.
+	 * @return bool True if a regeneration is in flight.
+	 */
+	protected static function regeneration_is_in_flight( $cache_key, $cache_group ) {
+		$lock_key = self::get_regeneration_lock_key( $cache_key, $cache_group );
+		if ( wp_using_ext_object_cache() ) {
+			return (bool) wp_cache_get( $lock_key, $cache_group );
+		}
+		return (bool) get_transient( $cache_group . '_' . $lock_key );
 	}
 
 	/**
