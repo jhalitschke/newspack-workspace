@@ -619,11 +619,23 @@ class Newspack_Blocks_Caching {
 		// plugin version that built a different payload. Anything missing a field the
 		// worker relies on is dropped rather than half-processed — in particular a job
 		// without a lock key could never release the lock it was queued under.
+		if ( ! is_array( $job ) ) {
+			return;
+		}
+
 		foreach ( [ 'block_data', 'cache_keys', 'cache_group', 'lock_key' ] as $required ) {
-			if ( ! is_array( $job ) || empty( $job[ $required ] ) ) {
+			if ( empty( $job[ $required ] ) ) {
 				return;
 			}
 		}
+
+		// The two array-shaped fields are consumed structurally — block_data is handed
+		// to render_block(), cache_keys is iterated — so their type is checked too,
+		// not just their presence.
+		if ( ! is_array( $job['block_data'] ) || ! is_array( $job['cache_keys'] ) ) {
+			return;
+		}
+
 		self::regenerate_job( $job );
 	}
 

@@ -650,6 +650,22 @@ class CachingTest extends WP_UnitTestCase { // phpcs:ignore
 
 		Newspack_Blocks_Caching::handle_regeneration_job( 'not an array at all' );
 		$this->assertSame( '<p>untouched</p>', wp_cache_get( $cache_key, self::CACHE_GROUP_FOR_TEST )['cached_content'] );
+
+		// Present but of the wrong type: block_data is handed to render_block() and
+		// cache_keys is iterated, so a scalar in either slot has to be rejected as
+		// firmly as a missing one.
+		foreach ( [ 'block_data', 'cache_keys' ] as $array_field ) {
+			$wrong_type                 = $job;
+			$wrong_type[ $array_field ] = 'a string, not an array';
+
+			Newspack_Blocks_Caching::handle_regeneration_job( $wrong_type );
+
+			$this->assertSame(
+				'<p>untouched</p>',
+				wp_cache_get( $cache_key, self::CACHE_GROUP_FOR_TEST )['cached_content'],
+				sprintf( 'A job whose %s is not an array must be dropped without touching the cache.', $array_field )
+			);
+		}
 	}
 
 	/**
