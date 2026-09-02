@@ -147,16 +147,27 @@ class Newspack_Blocks_Caching {
 			}
 
 			/**
-			 * TTL in seconds of the short-lived lock used to prevent concurrent
-			 * requests from duplicating background regeneration work for the same
-			 * stale block. Cold renders of these blocks have been measured taking
-			 * 22-130 seconds in production-like conditions, so 150 seconds
-			 * comfortably covers worst-case render time before another request
-			 * would be allowed to duplicate the regeneration work. Every exit path
-			 * from a regeneration job releases the lock explicitly — including a
-			 * render that throws, and the case where no background mechanism is
-			 * available at all — so a lock only survives to its TTL after an
-			 * unrecoverable process death (e.g. an OOM kill).
+			 * TTL in seconds of the short-lived lock that keeps concurrent requests
+			 * from duplicating background regeneration work for the same stale block.
+			 * The lock is taken when the work is queued and released when it finishes.
+			 *
+			 * 150 seconds is sized against render time: cold renders of these blocks
+			 * have been measured at 22-130 seconds in production-like conditions. That
+			 * covers the inline path, where rendering starts as soon as the response is
+			 * detached. It does not necessarily cover the Action Scheduler path, where
+			 * the lock is held from the moment the job is queued and the job runs on a
+			 * later WP-Cron pass — if the queue is backed up, or cron is disabled or
+			 * driven by a slow system crontab, the lock can expire before the job ever
+			 * runs, and the next request finding the block stale will queue a second
+			 * job for it. The cost is duplicated work, not incorrect output: both jobs
+			 * write the same freshly rendered markup. Raise this constant on sites
+			 * where Action Scheduler regularly lags further behind than this.
+			 *
+			 * Every exit path from a regeneration job releases the lock explicitly —
+			 * including a render that throws, and the case where no background
+			 * mechanism is available at all — so, queue lag aside, a lock only
+			 * survives to its TTL after an unrecoverable process death (e.g. an OOM
+			 * kill).
 			 *
 			 * @constant NEWSPACK_BLOCKS_CACHE_REGEN_LOCK_TTL
 			 * @type     int

@@ -45,8 +45,14 @@ class CachingTest extends WP_UnitTestCase { // phpcs:ignore
 	/**
 	 * Also reset after each test, in case a test leaves static state behind that
 	 * could affect other test classes.
+	 *
+	 * The cacheable-blocks filter added by get_renderable_block_data() is dropped
+	 * here as well. WP_UnitTestCase already restores $wp_filter wholesale in its
+	 * own tear_down(), so this is belt and braces — but the filter is an anonymous
+	 * closure that could not be removed by name if that ever stopped being true.
 	 */
 	public function tear_down() {
+		remove_all_filters( 'newspack_blocks_cacheable_blocks' );
 		$this->reset_caching_static_state();
 		parent::tear_down();
 	}
